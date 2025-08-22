@@ -108,7 +108,9 @@ def format_bytes(bytes_value):
     return f"{bytes_value:.1f} TB"
 
 def get_video_info(url):
+    """Extract video information and available formats"""
     try:
+        print(f"Extracting info from: {url}")
         ydl_opts = {
             'quiet': False,
             'no_warnings': False,
@@ -117,16 +119,23 @@ def get_video_info(url):
             'writedescription': False,
             'writesubtitles': False,
             'writeautomaticsub': False,
-            # Add these new options
+            # NEW: Add these to bypass bot detection
+            'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
             'http_headers': {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                'Accept-Language': 'en-US,en;q=0.5',
+                'Accept-Encoding': 'gzip, deflate',
+                'Connection': 'keep-alive',
             },
             'extractor_args': {
                 'youtube': {
-                    'player_client': ['android', 'web']
+                    'player_client': ['android', 'web'],
+                    'skip': ['hls', 'dash']
                 }
             }
         }
+        # Rest of your function stays the same...
 
         
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
