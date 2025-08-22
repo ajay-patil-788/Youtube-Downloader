@@ -108,9 +108,7 @@ def format_bytes(bytes_value):
     return f"{bytes_value:.1f} TB"
 
 def get_video_info(url):
-    """Extract video information and available formats"""
     try:
-        print(f"Extracting info from: {url}")
         ydl_opts = {
             'quiet': False,
             'no_warnings': False,
@@ -119,7 +117,17 @@ def get_video_info(url):
             'writedescription': False,
             'writesubtitles': False,
             'writeautomaticsub': False,
+            # Add these new options
+            'http_headers': {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+            },
+            'extractor_args': {
+                'youtube': {
+                    'player_client': ['android', 'web']
+                }
+            }
         }
+
         
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             print("Starting extraction...")
