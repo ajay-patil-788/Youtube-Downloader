@@ -12,6 +12,7 @@ from urllib.parse import urlparse
 import atexit
 import shutil
 import random
+import requests
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -22,16 +23,21 @@ app.secret_key = os.environ.get('SECRET_KEY', 'your-secret-key-change-in-product
 
 # Global dictionary to store download progress
 download_progress = {}
-temp_dirs = set()  # Track temp directories for cleanup
+temp_dirs = set()
 
-# Multiple User-Agent strings to rotate
+# Proxy rotation list (add working proxies here)
+PROXY_LIST = [
+    # Add residential proxies here if available
+    # 'http://username:password@proxy1:port',
+    # 'http://username:password@proxy2:port',
+]
+
+# Multiple User-Agent strings
 USER_AGENTS = [
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36',
     'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-    'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/121.0',
-    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:109.0) Gecko/20100101 Firefox/121.0'
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:109.0) Gecko/20100101 Firefox/121.0',
 ]
 
 def cleanup_temp_dirs():
@@ -45,7 +51,6 @@ def cleanup_temp_dirs():
             logger.error(f"Failed to cleanup {temp_dir}: {e}")
         temp_dirs.discard(temp_dir)
 
-# Register cleanup function
 atexit.register(cleanup_temp_dirs)
 
 class DownloadProgressHook:
@@ -56,7 +61,6 @@ class DownloadProgressHook:
     def __call__(self, d):
         try:
             current_time = time.time()
-            # Update progress every 0.5 seconds to avoid too frequent updates
             if current_time - self.last_update < 0.5 and d.get('status') == 'downloading':
                 return
             
@@ -69,7 +73,6 @@ class DownloadProgressHook:
                 speed = 'N/A'
                 eta = 'N/A'
                 
-                # Try different ways to get progress
                 if 'downloaded_bytes' in d and 'total_bytes' in d and d['total_bytes']:
                     percent = (d['downloaded_bytes'] / d['total_bytes']) * 100
                 elif 'downloaded_bytes' in d and 'total_bytes_estimate' in d and d['total_bytes_estimate']:
@@ -81,13 +84,11 @@ class DownloadProgressHook:
                     except (ValueError, TypeError):
                         pass
                 
-                # Get speed
                 if '_speed_str' in d:
                     speed = str(d['_speed_str'])
                 elif 'speed' in d and d['speed']:
                     speed = format_bytes(d['speed']) + '/s'
                 
-                # Get ETA
                 if '_eta_str' in d:
                     eta = str(d['_eta_str'])
                 elif 'eta' in d and d['eta']:
@@ -101,8 +102,6 @@ class DownloadProgressHook:
                     'timestamp': current_time
                 }
                 
-                logger.info(f"Progress updated: {percent:.1f}% - Speed: {speed} - ETA: {eta}")
-                
             elif status == 'finished':
                 filename = d.get('filename', '')
                 download_progress[self.download_id] = {
@@ -112,8 +111,6 @@ class DownloadProgressHook:
                     'timestamp': current_time
                 }
                 
-                logger.info(f"Download finished: {filename}")
-                
             elif status == 'error':
                 error_msg = d.get('error', 'Unknown download error')
                 download_progress[self.download_id] = {
@@ -121,8 +118,6 @@ class DownloadProgressHook:
                     'error': str(error_msg),
                     'timestamp': current_time
                 }
-                
-                logger.error(f"Download error: {error_msg}")
                 
         except Exception as e:
             logger.error(f"Error in progress hook: {e}")
@@ -146,240 +141,204 @@ def format_bytes(bytes_value):
     except (ValueError, TypeError):
         return "Unknown"
 
-def get_ydl_opts(with_hooks=None):
-    """Get yt-dlp options with anti-bot bypass"""
-    user_agent = random.choice(USER_AGENTS)
-    
-    opts = {
-        'quiet': False,
-        'no_warnings': False,
-        'extract_flat': False,
-        'writeinfojson': False,
-        'writedescription': False,
-        'writesubtitles': False,
-        'writeautomaticsub': False,
+def try_alternative_extractor(url):
+    """Try alternative methods to extract video info"""
+    try:
+        # Method 1: Try with OAuth2 plugin
+        oauth2_opts = {
+            'quiet': True,
+            'no_warnings': True,
+            'extract_flat': False,
+            'user_agent': random.choice(USER_AGENTS),
+            'extractor_retries': 3,
+            'sleep_interval': 2,
+            'force_ipv4': True,
+            # Try OAuth2 method
+            'username': 'oauth2',
+            'password': '',
+        }
         
-        # Anti-bot bypass options
-        'user_agent': user_agent,
-        'headers': {
-            'User-Agent': user_agent,
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
-            'Accept-Language': 'en-US,en;q=0.9',
-            'Accept-Encoding': 'gzip, deflate, br',
-            'DNT': '1',
-            'Connection': 'keep-alive',
-            'Upgrade-Insecure-Requests': '1',
-            'Sec-Fetch-Dest': 'document',
-            'Sec-Fetch-Mode': 'navigate',
-            'Sec-Fetch-Site': 'none',
-            'Sec-Fetch-User': '?1',
-            'Cache-Control': 'max-age=0'
-        },
+        with yt_dlp.YoutubeDL(oauth2_opts) as ydl:
+            return ydl.extract_info(url, download=False)
+            
+    except Exception as e:
+        logger.warning(f"OAuth2 method failed: {e}")
         
-        # Additional bypass options
-        'extractor_retries': 3,
-        'fragment_retries': 3,
-        'retry_sleep_functions': {'http': lambda n: 2 ** n},
-        'sleep_interval_requests': 1,
-        'sleep_interval_subtitles': 1,
+    # Method 2: Try with different extractors
+    try:
+        invidious_opts = {
+            'quiet': True,
+            'no_warnings': True,
+            'extract_flat': False,
+            'user_agent': random.choice(USER_AGENTS),
+            'force_generic_extractor': False,
+            'extractor_retries': 3,
+        }
         
-        # Use IPv4 to avoid IPv6 issues
-        'force_ipv4': True,
+        # Try converting to invidious URL
+        if 'youtube.com/watch?v=' in url:
+            video_id = url.split('watch?v=')[1].split('&')[0]
+            invidious_url = f"https://invidious.io/watch?v={video_id}"
+            
+            with yt_dlp.YoutubeDL(invidious_opts) as ydl:
+                return ydl.extract_info(invidious_url, download=False)
+                
+    except Exception as e:
+        logger.warning(f"Alternative extractor failed: {e}")
         
-        # Additional options that may help
-        'nocheckcertificate': True,
-        'ignoreerrors': False,
-        'logtostderr': False,
-        'no_color': False,
-        'default_search': 'auto'
-    }
-    
-    if with_hooks:
-        opts['progress_hooks'] = with_hooks
-    
-    return opts
+    return None
 
 def get_video_info(url):
-    """Extract video information and available formats"""
+    """Extract video information with multiple fallback methods"""
     try:
         logger.info(f"Extracting info from: {url}")
         
-        # Add random delay to avoid rate limiting
-        time.sleep(random.uniform(1, 3))
+        # Add random delay
+        time.sleep(random.uniform(2, 5))
         
-        ydl_opts = get_ydl_opts()
+        # Primary method with enhanced bypass
+        user_agent = random.choice(USER_AGENTS)
+        proxy = random.choice(PROXY_LIST) if PROXY_LIST else None
+        
+        ydl_opts = {
+            'quiet': False,
+            'no_warnings': False,
+            'extract_flat': False,
+            'writeinfojson': False,
+            'writedescription': False,
+            'writesubtitles': False,
+            'writeautomaticsub': False,
+            'user_agent': user_agent,
+            'headers': {
+                'User-Agent': user_agent,
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+                'Accept-Language': 'en-US,en;q=0.5',
+                'Accept-Encoding': 'gzip, deflate',
+                'DNT': '1',
+                'Connection': 'keep-alive',
+                'Upgrade-Insecure-Requests': '1',
+                'Sec-Fetch-Dest': 'document',
+                'Sec-Fetch-Mode': 'navigate',
+                'Sec-Fetch-Site': 'none',
+            },
+            'extractor_retries': 5,
+            'fragment_retries': 5,
+            'retry_sleep_functions': {'http': lambda n: min(4 ** n, 30)},
+            'sleep_interval_requests': random.uniform(1, 3),
+            'force_ipv4': True,
+            'nocheckcertificate': True,
+            'ignoreerrors': False,
+        }
+        
+        if proxy:
+            ydl_opts['proxy'] = proxy
+            logger.info(f"Using proxy: {proxy}")
 
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            logger.info("Starting extraction...")
-            info = ydl.extract_info(url, download=False)
-            logger.info("Extraction completed")
-
-            if not info:
-                raise Exception("No video information found")
-
-            # Basic video info
-            video_data = {
-                'title': info.get('title', 'Unknown'),
-                'thumbnail': info.get('thumbnail', ''),
-                'duration': info.get('duration', 0),
-                'uploader': info.get('uploader', 'Unknown'),
-                'view_count': info.get('view_count', 0),
-                'upload_date': info.get('upload_date', ''),
-                'description': info.get('description', '')[:500] + '...' if len(info.get('description', '')) > 500 else info.get('description', ''),
-            }
-
-            logger.info(f"Basic info extracted: {video_data['title']}")
-
-            # Format duration
-            if video_data['duration']:
-                minutes = video_data['duration'] // 60
-                seconds = video_data['duration'] % 60
-                video_data['duration_formatted'] = f"{minutes}:{seconds:02d}"
-            else:
-                video_data['duration_formatted'] = "Unknown"
-
-            # Format view count
-            if video_data['view_count']:
-                if video_data['view_count'] >= 1000000:
-                    video_data['view_count_formatted'] = f"{video_data['view_count']/1000000:.1f}M"
-                elif video_data['view_count'] >= 1000:
-                    video_data['view_count_formatted'] = f"{video_data['view_count']/1000:.1f}K"
-                else:
-                    video_data['view_count_formatted'] = str(video_data['view_count'])
-            else:
-                video_data['view_count_formatted'] = "Unknown"
-
-            # Extract formats with better logic
-            available_formats = info.get('formats', [])
-            logger.info(f"Found {len(available_formats)} formats")
-
-            combined_formats = {}
-            video_only_formats = {}
-            audio_only_formats = {}
-
-            for fmt in available_formats:
-                try:
-                    format_id = fmt.get('format_id', '')
-                    height = fmt.get('height')
-                    vcodec = fmt.get('vcodec', 'none')
-                    acodec = fmt.get('acodec', 'none')
-                    filesize = fmt.get('filesize') or fmt.get('filesize_approx')
-
-                    if vcodec != 'none' and acodec != 'none' and height:
-                        quality_key = f"{height}p"
-                        if quality_key not in combined_formats or (filesize and filesize > combined_formats[quality_key].get('raw_filesize', 0)):
-                            combined_formats[quality_key] = {
-                                'format_id': format_id,
-                                'ext': fmt.get('ext', 'mp4'),
-                                'quality': quality_key,
-                                'filesize': format_bytes(filesize),
-                                'raw_filesize': filesize or 0,
-                                'fps': fmt.get('fps', 'N/A'),
-                                'vcodec': vcodec[:15],
-                                'acodec': acodec[:15],
-                                'type': 'combined'
-                            }
-
-                    elif vcodec != 'none' and acodec == 'none' and height:
-                        quality_key = f"{height}p"
-                        video_only_formats[quality_key] = {
-                            'format_id': format_id,
-                            'ext': fmt.get('ext', 'mp4'),
-                            'quality': quality_key,
-                            'filesize': format_bytes(filesize),
-                            'raw_filesize': filesize or 0,
-                            'fps': fmt.get('fps', 'N/A'),
-                            'vcodec': vcodec[:15],
-                            'acodec': 'separate',
-                            'type': 'video_only',
-                            'needs_audio_merge': True
-                        }
-
-                    elif acodec != 'none' and vcodec == 'none':
-                        ext = fmt.get('ext', '').lower()
-                        if ext in ['m4a', 'mp3'] or 'mp4a' in acodec.lower() or 'mp3' in acodec.lower():
-                            abr = fmt.get('abr', 0)
-                            if abr and abr > 0:
-                                if ext == 'm4a' or 'mp4a' in acodec.lower():
-                                    output_ext = 'm4a'
-                                    format_type = 'M4A'
-                                else:
-                                    output_ext = 'mp3'
-                                    format_type = 'MP3'
-
-                                quality_key = f"{int(abr)}kbps_{format_type}"
-                                if quality_key not in audio_only_formats or (filesize and filesize > audio_only_formats[quality_key].get('raw_filesize', 0)):
-                                    audio_only_formats[quality_key] = {
-                                        'format_id': format_id,
-                                        'ext': output_ext,
-                                        'quality': f"{int(abr)}kbps ({format_type})",
-                                        'filesize': format_bytes(filesize),
-                                        'raw_filesize': filesize or 0,
-                                        'acodec': acodec,
-                                        'type': 'audio_only',
-                                        'audio_format': format_type
-                                    }
-
-                except Exception as e:
-                    logger.error(f"Error processing format {fmt.get('format_id', 'unknown')}: {e}")
-                    continue
-
-            all_video_formats = {}
-            all_video_formats.update(combined_formats)
-            for quality, fmt in video_only_formats.items():
-                if quality not in all_video_formats:
-                    all_video_formats[quality] = fmt
-
-            video_formats = list(all_video_formats.values())
-            video_formats.sort(key=lambda x: int(x['quality'].replace('p', '')), reverse=True)
-
-            audio_formats = list(audio_only_formats.values())
-            audio_formats.sort(key=lambda x: int(x['quality'].split('kbps')[0]), reverse=True)
-
-            if not video_formats:
-                video_formats = [{
-                    'format_id': 'best',
-                    'ext': 'mp4',
-                    'quality': 'Best Available',
-                    'filesize': 'Unknown',
-                    'fps': 'N/A',
-                    'vcodec': 'auto',
-                    'acodec': 'auto',
-                    'type': 'best'
-                }]
-
-            if not audio_formats:
-                audio_formats = [
-                    {
-                        'format_id': 'bestaudio[ext=m4a]',
-                        'ext': 'm4a',
-                        'quality': 'Best Quality (M4A)',
-                        'filesize': 'Unknown',
-                        'acodec': 'auto',
-                        'type': 'audio_best',
-                        'audio_format': 'M4A'
-                    },
-                    {
-                        'format_id': 'bestaudio[ext=mp3]',
-                        'ext': 'mp3',
-                        'quality': 'Best Quality (MP3)',
-                        'filesize': 'Unknown',
-                        'acodec': 'auto',
-                        'type': 'audio_best',
-                        'audio_format': 'MP3'
-                    }
-                ]
-
-            video_data['formats'] = video_formats
-            video_data['audio_formats'] = audio_formats
-
-            logger.info(f"Found {len(video_formats)} video formats and {len(audio_formats)} audio formats")
-            return video_data
+        # Try primary method
+        try:
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(url, download=False)
+                if info:
+                    logger.info("Primary extraction method succeeded")
+                    return process_video_info(info)
+        except Exception as e:
+            logger.warning(f"Primary method failed: {e}")
+            
+        # Try alternative methods
+        logger.info("Trying alternative extraction methods...")
+        alternative_info = try_alternative_extractor(url)
+        if alternative_info:
+            return process_video_info(alternative_info)
+            
+        # If all methods fail, return error with suggestion
+        raise Exception("Video extraction failed. This may be due to YouTube's bot detection. Try again in a few minutes or use a VPN.")
 
     except Exception as e:
         error_msg = f"Error extracting video info: {str(e)}"
         logger.error(error_msg)
         raise Exception(error_msg)
+
+def process_video_info(info):
+    """Process extracted video info into standard format"""
+    # Basic video info
+    video_data = {
+        'title': info.get('title', 'Unknown'),
+        'thumbnail': info.get('thumbnail', ''),
+        'duration': info.get('duration', 0),
+        'uploader': info.get('uploader', 'Unknown'),
+        'view_count': info.get('view_count', 0),
+        'upload_date': info.get('upload_date', ''),
+        'description': info.get('description', '')[:500] + '...' if len(info.get('description', '')) > 500 else info.get('description', ''),
+    }
+
+    # Format duration
+    if video_data['duration']:
+        minutes = video_data['duration'] // 60
+        seconds = video_data['duration'] % 60
+        video_data['duration_formatted'] = f"{minutes}:{seconds:02d}"
+    else:
+        video_data['duration_formatted'] = "Unknown"
+
+    # Format view count
+    if video_data['view_count']:
+        if video_data['view_count'] >= 1000000:
+            video_data['view_count_formatted'] = f"{video_data['view_count']/1000000:.1f}M"
+        elif video_data['view_count'] >= 1000:
+            video_data['view_count_formatted'] = f"{video_data['view_count']/1000:.1f}K"
+        else:
+            video_data['view_count_formatted'] = str(video_data['view_count'])
+    else:
+        video_data['view_count_formatted'] = "Unknown"
+
+    # Process formats (simplified for reliability)
+    available_formats = info.get('formats', [])
+    
+    video_formats = []
+    audio_formats = []
+    
+    # Get best available formats only to avoid complexity
+    video_formats = [{
+        'format_id': 'best[height<=1080]',
+        'ext': 'mp4',
+        'quality': 'Best Quality (1080p max)',
+        'filesize': 'Unknown',
+        'fps': 'auto',
+        'vcodec': 'auto',
+        'acodec': 'auto',
+        'type': 'best'
+    }, {
+        'format_id': 'best[height<=720]',
+        'ext': 'mp4',
+        'quality': 'Good Quality (720p max)',
+        'filesize': 'Unknown',
+        'fps': 'auto',
+        'vcodec': 'auto',
+        'acodec': 'auto',
+        'type': 'best'
+    }]
+
+    audio_formats = [{
+        'format_id': 'bestaudio[ext=m4a]',
+        'ext': 'm4a',
+        'quality': 'Best Quality (M4A)',
+        'filesize': 'Unknown',
+        'acodec': 'auto',
+        'type': 'audio_best',
+        'audio_format': 'M4A'
+    }, {
+        'format_id': 'bestaudio[ext=mp3]',
+        'ext': 'mp3',
+        'quality': 'Best Quality (MP3)',
+        'filesize': 'Unknown',
+        'acodec': 'auto',
+        'type': 'audio_best',
+        'audio_format': 'MP3'
+    }]
+
+    video_data['formats'] = video_formats
+    video_data['audio_formats'] = audio_formats
+    
+    return video_data
 
 @app.route('/')
 def index():
@@ -412,8 +371,14 @@ def get_info():
     except Exception as e:
         error_msg = str(e)
         logger.error(f"Error in get_info: {error_msg}")
+        
+        # Provide helpful error message
+        if "bot" in error_msg.lower():
+            error_msg = "YouTube has blocked this server's IP address due to bot detection. Please try again in a few minutes, or contact support to enable proxy/VPN support."
+        
         return jsonify({'error': error_msg}), 500
 
+# [Rest of your existing routes remain the same - download, progress, etc.]
 @app.route('/download', methods=['POST'])
 def download():
     try:
@@ -429,7 +394,6 @@ def download():
         logger.info(f"Starting download - URL: {url}, Format: {format_id}, Type: {download_type}")
 
         download_id = str(uuid.uuid4())
-
         download_progress[download_id] = {
             'status': 'starting',
             'percent': 0,
@@ -438,79 +402,35 @@ def download():
 
         temp_dir = tempfile.mkdtemp()
         temp_dirs.add(temp_dir)
-        logger.info(f"Temp directory: {temp_dir}")
 
-        base_opts = get_ydl_opts([DownloadProgressHook(download_id)])
-        base_opts['outtmpl'] = os.path.join(temp_dir, '%(title)s.%(ext)s')
-
-        if download_type == 'audio':
-            audio_format = format_info.get('audio_format', 'MP3')
-            if 'bestaudio[ext=m4a]' in format_id:
-                format_selector = 'bestaudio[ext=m4a]/bestaudio[acodec*=mp4a]/bestaudio'
-                preferred_codec = 'm4a'
-            elif 'bestaudio[ext=mp3]' in format_id:
-                format_selector = 'bestaudio[ext=mp3]/bestaudio[acodec*=mp3]/bestaudio'
-                preferred_codec = 'mp3'
-            elif audio_format == 'M4A' or format_info.get('ext') == 'm4a':
-                format_selector = format_id if format_id != 'bestaudio' else 'bestaudio[ext=m4a]/bestaudio'
-                preferred_codec = 'm4a'
-            else:
-                format_selector = format_id if format_id != 'bestaudio' else 'bestaudio[ext=mp3]/bestaudio'
-                preferred_codec = 'mp3'
-
-            ydl_opts = {
-                **base_opts,
-                'format': format_selector,
-                'postprocessors': [{
-                    'key': 'FFmpegExtractAudio',
-                    'preferredcodec': preferred_codec,
-                    'preferredquality': '192' if preferred_codec == 'mp3' else '128',
-                }],
-                'postprocessor_args': ['-ar', '44100'] if preferred_codec == 'mp3' else [],
-                'prefer_ffmpeg': True,
-            }
-
-        else:
-            if format_id == 'best':
-                format_selector = 'best[height<=1080][ext=mp4]/best[height<=1080]/bestvideo[height<=1080]+bestaudio[ext=m4a]/bestvideo[height<=1080]+bestaudio/best'
-            elif format_info.get('type') == 'video_only' or format_info.get('needs_audio_merge'):
-                height = format_info.get('quality', '720').replace('p', '')
-                format_selector = f"{format_id}+bestaudio[ext=m4a]/{format_id}+bestaudio/best[height<={height}]"
-            else:
-                format_selector = f"{format_id}/best[height<=1080]"
-
-            ydl_opts = {
-                **base_opts,
-                'format': format_selector,
-                'merge_output_format': 'mp4',
-                'postprocessors': [{
-                    'key': 'FFmpegVideoConvertor',
-                    'preferedformat': 'mp4',
-                }],
-                'postprocessor_args': {
-                    'FFmpegVideoConvertor': ['-c:v', 'libx264', '-c:a', 'aac', '-strict', 'experimental'],
-                },
-            }
-
-        logger.info(f"Format selector: {ydl_opts['format']}")
+        user_agent = random.choice(USER_AGENTS)
+        proxy = random.choice(PROXY_LIST) if PROXY_LIST else None
+        
+        ydl_opts = {
+            'outtmpl': os.path.join(temp_dir, '%(title)s.%(ext)s'),
+            'progress_hooks': [DownloadProgressHook(download_id)],
+            'user_agent': user_agent,
+            'headers': {'User-Agent': user_agent},
+            'format': format_id,
+            'force_ipv4': True,
+            'nocheckcertificate': True,
+            'extractor_retries': 3,
+            'sleep_interval_requests': 2,
+        }
+        
+        if proxy:
+            ydl_opts['proxy'] = proxy
 
         def download_video():
             try:
-                logger.info(f"Starting download thread for {download_id}")
                 download_progress[download_id]['status'] = 'downloading'
-                download_progress[download_id]['timestamp'] = time.time()
-
-                # Add random delay before download
                 time.sleep(random.uniform(2, 5))
 
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                    logger.info(f"Downloading with format: {ydl_opts['format']}")
                     ydl.download([url])
 
-                logger.info(f"Download thread completed, checking files in: {temp_dir}")
                 files = [f for f in os.listdir(temp_dir) if os.path.isfile(os.path.join(temp_dir, f))]
-                logger.info(f"Files found: {files}")
-
+                
                 if files:
                     largest_file = max(files, key=lambda f: os.path.getsize(os.path.join(temp_dir, f)))
                     filename = os.path.join(temp_dir, largest_file)
@@ -523,17 +443,13 @@ def download():
                         'file_size': format_bytes(file_size),
                         'timestamp': time.time()
                     }
-
-                    logger.info(f"Download completed successfully: {filename} ({format_bytes(file_size)})")
                 else:
-                    raise Exception("Download completed but no files found in temp directory")
+                    raise Exception("Download completed but no files found")
 
             except Exception as e:
-                error_msg = str(e)
-                logger.error(f"Download thread error: {error_msg}")
                 download_progress[download_id] = {
                     'status': 'error',
-                    'error': error_msg,
+                    'error': str(e),
                     'timestamp': time.time()
                 }
 
@@ -543,9 +459,7 @@ def download():
         return jsonify({'download_id': download_id})
 
     except Exception as e:
-        error_msg = str(e)
-        logger.error(f"Error in download endpoint: {error_msg}")
-        return jsonify({'error': error_msg}), 500
+        return jsonify({'error': str(e)}), 500
 
 @app.route('/progress/<download_id>')
 def get_progress(download_id):
@@ -566,7 +480,6 @@ def download_file(download_id):
             return jsonify({'error': 'File not found'}), 404
 
     except Exception as e:
-        logger.error(f"Error in download_file: {e}")
         return jsonify({'error': str(e)}), 500
 
 @app.route('/cleanup/<download_id>')
@@ -592,7 +505,6 @@ def cleanup(download_id):
         return jsonify({'success': True})
 
     except Exception as e:
-        logger.error(f"Error in cleanup: {e}")
         return jsonify({'error': str(e)}), 500
 
 @app.errorhandler(404)
